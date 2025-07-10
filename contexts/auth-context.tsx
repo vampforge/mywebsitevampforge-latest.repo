@@ -1,123 +1,130 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
-
-interface User {
-  id: string
-  email: string
-  name: string
-  role: "admin" | "editor"
-  avatar?: string
-}
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { getSupabaseBrowserClient, type User as DBUser } from "@/lib/supabase"
+import {
+  signUp as authSignUp,
+  signIn as authSignIn,
+  signOut as authSignOut,
+  getUserProfile,
+  updateUserProfile as authUpdateProfile,
+} from "@/lib/auth"
 
 interface AuthContextType {
-  user: User | null
-  login: (email: string, password: string) => Promise<boolean>
-  signup: (email: string, password: string, name: string) => Promise<boolean>
-  logout: () => void
-  isLoading: boolean
+  user: DBUser | null
+  loading: boolean
+  signUp: (email: string, password: string, fullName: string) => Promise<{ error: any | null }>
+  signIn: (email: string, password: string) => Promise<{ error: any | null }>
+  signOut: () => Promise<void>
+  updateProfile: (updates: Partial<DBUser>) => Promise<{ error: any | null }>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Demo users for authentication
-const DEMO_USERS = [
-  {
-    id: "1",
-    email: "admin@vampforge.com",
-    password: "VampForge2024!",
-    name: "Admin User",
-    role: "admin" as const,
-    avatar: "/placeholder.svg?height=40&width=40",
-  },
-  {
-    id: "2",
-    email: "editor@vampforge.com",
-    password: "Editor2024!",
-    name: "Editor User",
-    role: "editor" as const,
-    avatar: "/placeholder.svg?height=40&width=40",
-  },
-]
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const supabase = getSupabaseBrowserClient()
+  const [user, setUser] = useState<DBUser | null>(null)
+  const [loading, setLoading] = useState(true)
 
+  /* ------------------------------------------------------------------ */
+  /* Initial session bootstrap                                           */
+  /* ------------------------------------------------------------------ */
   useEffect(() => {
-    // Check for stored user session
-    const storedUser = localStorage.getItem("vampforge_user")
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser))
-      } catch (error) {
-        console.error("Error parsing stored user:", error)
-        localStorage.removeItem("vampforge_user")
+    if (!supabase) {
+      console.warn("[AuthProvider] Supabase client unavailable – auth disabled.")
+      setLoading(false)
+      return
+    }
+    ;(async () => {
+      /* Get current session */
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession()
+      if (!error && session?.user) {
+        await handleFetchProfile(session.user.id)
       }
+      setLoading(false)
+    })()
+
+    /* Listen for subsequent auth events */
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        handleFetchProfile(session.user.id)
+      } else {
+        setUser(null)
+      }
+    })
+
+    return () => {
+      subscription.unsubscribe()
     }
-    setIsLoading(false)
-  }, [])
+  }, [supabase])
 
-  const login = async (email: string, password: string): Promise<boolean> => {
-    setIsLoading(true)
+  /* ------------------------------------------------------------------ */
+  /* Helpers                                                             */
+  /* ------------------------------------------------------------------ */
 
-    // Simulate API call delay
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    const foundUser = DEMO_USERS.find((u) => u.email === email && u.password === password)
-
-    if (foundUser) {
-      const { password: _, ...userWithoutPassword } = foundUser
-      setUser(userWithoutPassword)
-      localStorage.setItem("vampforge_user", JSON.stringify(userWithoutPassword))
-      setIsLoading(false)
-      return true
-    }
-
-    setIsLoading(false)
-    return false
+  const handleFetchProfile = async (userId: string) => {
+    const { data, error } = await getUserProfile(userId)
+    if (!error) setUser(data as DBUser)
   }
 
-  const signup = async (email: string, password: string, name: string): Promise<boolean> => {
-    setIsLoading(true)
+  /* ------------------------------------------------------------------ */
+  /* Public API                                                          */
+  /* ------------------------------------------------------------------ */
 
-    // Simulate API call delay
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    // Check if user already exists
-    const existingUser = DEMO_USERS.find((u) => u.email === email)
-    if (existingUser) {
-      setIsLoading(false)
-      return false
-    }
-
-    // Create new user
-    const newUser = {
-      id: Date.now().toString(),
-      email,
-      name,
-      role: "editor" as const,
-      avatar: "/placeholder.svg?height=40&width=40",
-    }
-
-    setUser(newUser)
-    localStorage.setItem("vampforge_user", JSON.stringify(newUser))
-    setIsLoading(false)
-    return true
+  const signUp = async (email: string, password: string, fullName: string) => {
+    if (!supabase) return { error: "Supabase client unavailable (signup blocked)" }
+    setLoading(true)
+    const { error } = await authSignUp(email, password, fullName)
+    setLoading(false)
+    return { error }
   }
 
-  const logout = () => {
+  const signIn = async (email: string, password: string) => {
+    if (!supabase) return { error: "Supabase client unavailable (signin blocked)" }
+    setLoading(true)
+    const { error } = await authSignIn(email, password)
+    setLoading(false)
+    return { error }
+  }
+
+  const signOut = async () => {
+    if (!supabase) return
+    setLoading(true)
+    await authSignOut()
     setUser(null)
-    localStorage.removeItem("vampforge_user")
+    setLoading(false)
   }
 
-  return <AuthContext.Provider value={{ user, login, signup, logout, isLoading }}>{children}</AuthContext.Provider>
+  const updateProfile = async (updates: Partial<DBUser>) => {
+    if (!supabase || !user) return { error: "Supabase client unavailable (update blocked)" }
+    const { error } = await authUpdateProfile(user.id, updates)
+    if (!error) await handleFetchProfile(user.id)
+    return { error }
+  }
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        signUp,
+        signIn,
+        signOut,
+        updateProfile,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext)
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider")
-  }
-  return context
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error("useAuth must be used inside an <AuthProvider />")
+  return ctx
 }
