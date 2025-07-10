@@ -1,12 +1,13 @@
 "use client"
 
+import { Suspense } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Users, FileText, MessageSquare, TrendingUp, Eye, Activity, Settings, Plus, BarChart3 } from "lucide-react"
 
-export default function CMSDashboard() {
+function DashboardContent() {
   const { user } = useAuth()
 
   const stats = [
@@ -212,5 +213,13 @@ export default function CMSDashboard() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function CMSDashboardPage() {
+  return (
+    <Suspense fallback={<div className="p-4 text-gray-400">Loading dashboard…</div>}>
+      <DashboardContent />
+    </Suspense>
   )
 }
